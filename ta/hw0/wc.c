@@ -8,17 +8,6 @@ typedef struct Count {
     unsigned int characters;
 } Count;
 
-typedef void fn (int);
-
-static void bar(int x) {
-    printf("%d", x);
-}
-
-
-void bleh(fn *ptr) {
-    ptr(3);
-}
-
 void wc(FILE *ofile, FILE *infile, char *inname) {
     Count stats;
 
@@ -47,11 +36,8 @@ void wc(FILE *ofile, FILE *infile, char *inname) {
 }
 
 int main (int __unused argc, char __unused  *argv[]) {
-//    char *fileIn = argv[1];
-//    char *fileOut = argv[2];
-//    wc(fopen(fileOut, "w"), fopen(fileIn, "r"), fileIn);
-//
-//dd
-    bleh(&bar);
+    char *fileIn = argv[1];
+    char *fileOut = argv[2];
+    wc(fopen(fileOut, "w"), fopen(fileIn, "r"), fileIn);
     return 0;
 }
