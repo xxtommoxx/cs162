@@ -619,10 +619,7 @@ sub run_qemu {
     print "warning: qemu doesn't support jitter\n"
       if defined $jitter;
     my (@cmd) = ('qemu-system-i386');
-    push (@cmd, '-hda', $disks[0]) if defined $disks[0];
-    push (@cmd, '-hdb', $disks[1]) if defined $disks[1];
-    push (@cmd, '-hdc', $disks[2]) if defined $disks[2];
-    push (@cmd, '-hdd', $disks[3]) if defined $disks[3];
+    push (@cmd, '-drive', 'file=' . $disks[0] . ',index=0,format=raw') if defined $disks[0];
     push (@cmd, '-m', $mem);
     push (@cmd, '-net', 'none');
     push (@cmd, '-nographic') if $vga eq 'none';
@@ -899,7 +896,7 @@ sub timeout {
 # Returns the system load average over the last minute.
 # If the load average is less than 1.0 or cannot be determined, returns 1.0.
 sub get_load_average {
-    my ($avg) = `uptime` =~ /load average:\s*([^,]+),/;
+	my ($avg) = `uptime | cut -d: -f4- | rev | cut -d' ' -f1 | rev`;
     return $avg >= 1.0 ? $avg : 1.0;
 }
 
