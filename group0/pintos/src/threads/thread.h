@@ -91,7 +91,10 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     uint64_t sleep_tick;
+    struct list waiting_thread_list;    /* list of threads waiting for this thread's acquired locks */
     struct list_elem allelem;           /* List element for all threads list. */
+
+    struct list_elem wait_elem;         /* List element used to indicate this thread is blocked by waiting for a lock */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -104,6 +107,10 @@ struct thread
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
+
+void thread_lock_wait_acquired (struct thread *t);
+void thread_lock_wait_added(struct lock *lock);
+bool donation_less (const struct list_elem *a_, const struct list_elem *b_, void *aux UNUSED);
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -141,5 +148,7 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+
 
 #endif /* threads/thread.h */

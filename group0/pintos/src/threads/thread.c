@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "threads/flags.h"
+#include "threads/synch.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
@@ -76,6 +77,9 @@ static tid_t allocate_tid (void);
 
 static bool sleep_less (const struct list_elem *a_, const struct list_elem *b_, void *aux UNUSED);
 static bool priority_less (const struct list_elem *a_, const struct list_elem *b_, void *aux UNUSED);
+
+static int get_max_priority_donation (struct thread *a);
+static int get_max_priority_donation_helper (struct thread *a, int depth);
 static void add_to_ready_list(struct thread *t);
 static bool is_highest_priority(struct thread *t);
 
@@ -166,7 +170,10 @@ static bool
 is_highest_priority(struct thread *t) {
   if (!list_empty (&ready_list)) {
     struct thread *head = list_entry (list_front(&ready_list), struct thread, elem);
-    return head->priority < t->priority;
+    int x = get_max_priority_donation(head);
+    int y = get_max_priority_donation(t);
+
+    return x < y;
   }
   return true;
 }
@@ -176,7 +183,7 @@ add_to_ready_list(struct thread *t) {
   ASSERT (intr_get_level () == INTR_OFF);
 
   list_push_back (&ready_list, &t->elem);
-  list_sort(&ready_list, &priority_less, NULL);
+  list_sort(&ready_list, &donation_less, NULL);
 }
 
 /* Prints thread statistics. */
@@ -352,6 +359,7 @@ thread_yield (void)
   old_level = intr_disable ();
   if (cur != idle_thread)
     add_to_ready_list (cur);
+
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -411,7 +419,7 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void)
 {
-  return thread_current ()->priority;
+  return get_max_priority_donation(thread_current ());
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -532,11 +540,28 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  list_init (&t->waiting_thread_list);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
 }
+
+void
+thread_lock_wait_acquired (struct thread *t) {
+  list_remove (&t->wait_elem);
+}
+
+void
+thread_lock_wait_added (struct lock *lock) {
+  ASSERT(lock->holder != NULL);
+
+  list_push_front(&lock->holder->waiting_thread_list, &thread_current ()->wait_elem);
+  list_sort(&lock->holder->waiting_thread_list, &priority_less, NULL);
+
+  list_sort(&ready_list, &donation_less, NULL);
+}
+
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
    returns a pointer to the frame's base. */
@@ -561,8 +586,9 @@ next_thread_to_run (void)
 {
   if (list_empty (&ready_list))
     return idle_thread;
-  else
+  else {
     return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  }
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -607,6 +633,7 @@ thread_schedule_tail (struct thread *prev)
   if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread)
     {
       ASSERT (prev != cur);
+
       palloc_free_page (prev);
     }
 
@@ -639,6 +666,7 @@ schedule (void)
 static tid_t
 allocate_tid (void)
 {
+  // one is for main thread lock_acquire uses malloc which is not setup yet
   static tid_t next_tid = 1;
   tid_t tid;
 
@@ -648,15 +676,41 @@ allocate_tid (void)
 
   return tid;
 }
-/* Sort fn based on priority */
-static bool
-priority_less (const struct list_elem *a_, const struct list_elem *b_,
+
+/* Sort by priority donation
+ * If a thread is holding a lock where any of the waiting threads has a
+ * higher priority than itself then  use the max of that.
+*/
+bool
+donation_less (const struct list_elem *a_, const struct list_elem *b_,
             void *aux UNUSED)
 {
-  const struct thread *a = list_entry (a_, struct thread, elem);
-  const struct thread *b = list_entry (b_, struct thread, elem);
+  struct thread *a = list_entry (a_, struct thread, elem);
+  struct thread *b = list_entry (b_, struct thread, elem);
+  return get_max_priority_donation(a) > get_max_priority_donation(b);
+}
 
-  return a->priority > b->priority;
+static int get_max_priority_donation (struct thread *a) {
+  return get_max_priority_donation_helper(a, 0);
+}
+
+static
+int get_max_priority_donation_helper (struct thread *a, int depth) {
+  ASSERT(depth < 10);
+
+  int t_priority = a->priority;
+  int t_donation = PRI_MIN;
+
+  struct list *wait_list = &a->waiting_thread_list;
+
+  if (!list_empty (wait_list)) {
+    // wait sorted descending priority order
+    struct thread *wait_t = list_entry (list_begin (wait_list), struct thread, wait_elem);
+    int wait_max_priority = get_max_priority_donation_helper(wait_t, depth+1);
+    t_donation = t_donation > wait_max_priority ? t_donation : wait_max_priority;
+  }
+
+  return t_priority > t_donation ? t_priority : t_donation;
 }
 
 /* Sort fn based on time_sleep_ticks */
@@ -669,6 +723,17 @@ sleep_less (const struct list_elem *a_, const struct list_elem *b_,
 
   return a->sleep_tick < b->sleep_tick;
 }
+
+/* Sort fn based on priority */
+bool
+priority_less (const struct list_elem *a_, const struct list_elem *b_, void *aux UNUSED)
+{
+  const struct thread *a = list_entry (a_, struct thread, elem);
+  const struct thread *b = list_entry (b_, struct thread, elem);
+
+  return a->priority > b->priority;
+}
+
 
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
