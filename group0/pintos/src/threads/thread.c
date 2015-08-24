@@ -162,18 +162,16 @@ thread_tick (void)
   }
 
   /* Enforce preemption. */
-  if (++thread_ticks >= TIME_SLICE || !is_highest_priority(t) )
+  if (++thread_ticks >= TIME_SLICE || (!thread_mlfqs && !is_highest_priority(t))) {
     intr_yield_on_return ();
+  }
 }
 
 static bool
 is_highest_priority(struct thread *t) {
   if (!list_empty (&ready_list)) {
     struct thread *head = list_entry (list_front(&ready_list), struct thread, elem);
-    int x = get_max_priority_donation(head);
-    int y = get_max_priority_donation(t);
-
-    return x < y;
+    return get_max_priority_donation(t) >= get_max_priority_donation(head);
   }
   return true;
 }
@@ -183,7 +181,9 @@ add_to_ready_list(struct thread *t) {
   ASSERT (intr_get_level () == INTR_OFF);
 
   list_push_back (&ready_list, &t->elem);
-  list_sort(&ready_list, &donation_less, NULL);
+
+  if (!thread_mlfqs)
+    list_sort(&ready_list, &donation_less, NULL);
 }
 
 /* Prints thread statistics. */
@@ -248,7 +248,7 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
-  if (!is_highest_priority (thread_current ()))
+  if (!thread_mlfqs && !is_highest_priority (thread_current ()))
       thread_yield();
 
   return tid;
@@ -411,7 +411,7 @@ thread_set_priority (int new_priority)
 
   // a lock is not needed since when schedule interrupts are turned off and the greatest
   // priority will eventually be scheduled
-  if (!is_highest_priority (curr))
+  if (!thread_mlfqs && !is_highest_priority (curr))
     thread_yield();
 }
 
@@ -419,7 +419,10 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void)
 {
-  return get_max_priority_donation(thread_current ());
+  if (!thread_mlfqs)
+    return get_max_priority_donation(thread_current ());
+  else
+    return thread_current ()->priority;
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -549,12 +552,14 @@ init_thread (struct thread *t, const char *name, int priority)
 
 void
 thread_lock_wait_acquired (struct thread *t) {
+  ASSERT(!thread_mlfqs)
   list_remove (&t->wait_elem);
 }
 
 void
 thread_lock_wait_added (struct lock *lock) {
   ASSERT(lock->holder != NULL);
+  ASSERT(!thread_mlfqs)
 
   list_push_front(&lock->holder->waiting_thread_list, &thread_current ()->wait_elem);
   list_sort(&lock->holder->waiting_thread_list, &priority_less, NULL);
@@ -691,6 +696,7 @@ donation_less (const struct list_elem *a_, const struct list_elem *b_,
 }
 
 static int get_max_priority_donation (struct thread *a) {
+  ASSERT(!thread_mlfqs)
   return get_max_priority_donation_helper(a, 0);
 }
 
