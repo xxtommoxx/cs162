@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "threads/flags.h"
+#include "threads/fixed-point.h"
 #include "threads/synch.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -63,12 +64,15 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
 
+static fixed_point_t load_avg;
+static void update_load_avg();
+
 static void kernel_thread (thread_func *, void *aux);
 
 static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
 static struct thread *next_thread_to_run (void);
-static void init_thread (struct thread *, const char *name, int priority);
+static void init_thread (struct thread *, const char *name, int priority, int nice, int recent_cpu);
 static bool is_thread (struct thread *) UNUSED;
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
@@ -107,8 +111,9 @@ thread_init (void)
   list_init (&sleep_list);
 
   /* Set up a thread structure for the running thread. */
+  load_avg = fix_int (0);
   initial_thread = running_thread ();
-  init_thread (initial_thread, "main", PRI_DEFAULT);
+  init_thread (initial_thread, "main", PRI_DEFAULT, 0, 0);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
 }
@@ -161,10 +166,23 @@ thread_tick (void)
     }
   }
 
+  if (timer_ticks() % TIMER_FREQ == 0) {
+    //(59=60)  load_avg + (1=60)  ready_threads
+    // TODO update recent cpu for all && load average
+    update_load_avg();
+  }
+
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE || (!thread_mlfqs && !is_highest_priority(t))) {
     intr_yield_on_return ();
   }
+}
+
+static void update_load_avg() {
+  load_avg = fix_add (
+                      fix_mul (fix_frac (59, 60), load_avg),
+                      fix_mul (fix_frac (1, 60), fix_int (list_size (&ready_list)))
+                     );
 }
 
 static bool
@@ -227,7 +245,7 @@ thread_create (const char *name, int priority,
     return TID_ERROR;
 
   /* Initialize thread. */
-  init_thread (t, name, priority);
+  init_thread (t, name, priority, thread_current ()-> nice, thread_current ()->recent_cpu);
   tid = t->tid = allocate_tid ();
 
   /* Stack frame for kernel_thread(). */
@@ -444,8 +462,8 @@ thread_get_nice (void)
 int
 thread_get_load_avg (void)
 {
-  /* Not yet implemented. */
-  return 0;
+  fixed_point_t times_100 = fix_mul (load_avg, fix_int (100));
+  return fix_round (times_100);
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
@@ -529,7 +547,7 @@ is_thread (struct thread *t)
 /* Does basic initialization of T as a blocked thread named
    NAME. */
 static void
-init_thread (struct thread *t, const char *name, int priority)
+init_thread (struct thread *t, const char *name, int priority, int nice, int recent_cpu)
 {
   enum intr_level old_level;
 
@@ -542,6 +560,8 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->nice = nice;
+  t->recent_cpu = recent_cpu;
   t->magic = THREAD_MAGIC;
   list_init (&t->waiting_thread_list);
 
