@@ -65,14 +65,14 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
 bool thread_mlfqs;
 
 static fixed_point_t load_avg;
-static void update_load_avg();
+static void update_load_avg(void);
 
 static void kernel_thread (thread_func *, void *aux);
 
 static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
 static struct thread *next_thread_to_run (void);
-static void init_thread (struct thread *, const char *name, int priority, int nice, int recent_cpu);
+static void init_thread (struct thread *, const char *name, int priority, int nice, fixed_point_t recent_cpu);
 static bool is_thread (struct thread *) UNUSED;
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
@@ -86,6 +86,9 @@ static int get_max_priority_donation (struct thread *a);
 static int get_max_priority_donation_helper (struct thread *a, int depth);
 static void add_to_ready_list(struct thread *t);
 static bool is_highest_priority(struct thread *t);
+
+static void update_priority(struct thread *t, void *aux UNUSED);
+static void update_recent_cpu(struct thread *t, void *aux UNUSED);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -113,7 +116,7 @@ thread_init (void)
   /* Set up a thread structure for the running thread. */
   load_avg = fix_int (0);
   initial_thread = running_thread ();
-  init_thread (initial_thread, "main", PRI_DEFAULT, 0, 0);
+  init_thread (initial_thread, "main", PRI_DEFAULT, 0, fix_int(0));
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
 }
@@ -166,11 +169,19 @@ thread_tick (void)
     }
   }
 
-  if (timer_ticks() % TIMER_FREQ == 0) {
-    //(59=60)  load_avg + (1=60)  ready_threads
-    // TODO update recent cpu for all && load average
-    update_load_avg();
+  if (thread_mlfqs) {
+    t->recent_cpu = fix_add(t->recent_cpu, fix_int (1));
+
+    if (timer_ticks() % TIMER_FREQ == 0) {
+      update_load_avg();
+      thread_foreach (&update_recent_cpu, NULL);
+    }
+
+    if (timer_ticks() % 4 == 0) {
+      thread_foreach (&update_priority, NULL);
+    }
   }
+
 
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE || (!thread_mlfqs && !is_highest_priority(t))) {
@@ -183,6 +194,19 @@ static void update_load_avg() {
                       fix_mul (fix_frac (59, 60), load_avg),
                       fix_mul (fix_frac (1, 60), fix_int (list_size (&ready_list)))
                      );
+}
+
+static void update_priority(struct thread *t, void *aux UNUSED) {
+  fixed_point_t recentCoeff = fix_div (t->recent_cpu, fix_int (4));
+  fixed_point_t niceCoeff = fix_mul (fix_int (t->nice), fix_int (2));
+
+  t->priority = fix_trunc (fix_sub (fix_int (PRI_MAX), fix_sub (recentCoeff, niceCoeff)));
+}
+
+static void update_recent_cpu(struct thread *t, void *aux UNUSED) {
+  fixed_point_t coeff = fix_div (fix_mul (fix_int (2), load_avg),
+                                 fix_add (fix_mul (fix_int (2), load_avg), fix_int (1)));
+  t->recent_cpu = fix_add (fix_mul (coeff, t->recent_cpu), fix_int (t->nice));
 }
 
 static bool
@@ -547,7 +571,7 @@ is_thread (struct thread *t)
 /* Does basic initialization of T as a blocked thread named
    NAME. */
 static void
-init_thread (struct thread *t, const char *name, int priority, int nice, int recent_cpu)
+init_thread (struct thread *t, const char *name, int priority, int nice, fixed_point_t recent_cpu)
 {
   enum intr_level old_level;
 
