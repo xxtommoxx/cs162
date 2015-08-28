@@ -29,6 +29,8 @@ typedef int tid_t;
 #define NICE_MIN = -20
 #define NICE_MAX = 20
 
+#define MLQ_SIZE (PRI_MAX - PRI_MIN)
+
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The

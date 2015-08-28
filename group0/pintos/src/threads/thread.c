@@ -27,6 +27,9 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+/* Ready threads in multi-level queue */
+static struct list mlq[MLQ_SIZE + 1];
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
@@ -63,6 +66,9 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+
+// the count aka the size of ready_list when mlfqs is disabled
+static int ready_count;
 
 static fixed_point_t load_avg;
 static void update_load_avg(void);
@@ -109,11 +115,17 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
-  list_init (&ready_list);
   list_init (&all_list);
   list_init (&sleep_list);
 
-  /* Set up a thread structure for the running thread. */
+  if (!thread_mlfqs) {
+    list_init (&ready_list);
+  } else {
+    int i;
+    for (i = 0; i <= MLQ_SIZE; i++)
+      list_init (&mlq[i]);
+  }
+
   load_avg = fix_int (0);
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT, 0, fix_int(0));
@@ -190,9 +202,12 @@ thread_tick (void)
 }
 
 static void update_load_avg() {
+  // plus 1 since at most one thread could be running
+  int running_thread = thread_current () == idle_thread ? 0 : 1;
+
   load_avg = fix_add (
                       fix_mul (fix_frac (59, 60), load_avg),
-                      fix_mul (fix_frac (1, 60), fix_int (list_size (&ready_list)))
+                      fix_mul (fix_frac (1, 60), fix_int (ready_count + running_thread))
                      );
 }
 
@@ -200,7 +215,21 @@ static void update_priority(struct thread *t, void *aux UNUSED) {
   fixed_point_t recentCoeff = fix_div (t->recent_cpu, fix_int (4));
   fixed_point_t niceCoeff = fix_mul (fix_int (t->nice), fix_int (2));
 
-  t->priority = fix_trunc (fix_sub (fix_int (PRI_MAX), fix_sub (recentCoeff, niceCoeff)));
+  int newPriority = fix_trunc (fix_sub (fix_sub (fix_int (PRI_MAX), recentCoeff), niceCoeff));
+
+  if (newPriority < PRI_MIN)
+    newPriority = PRI_MIN;
+  else if (newPriority > PRI_MAX)
+    newPriority = PRI_MAX;
+
+  ASSERT (newPriority >= PRI_MIN && newPriority <= PRI_MAX);
+
+  if (t != idle_thread && t->status == THREAD_READY && newPriority != t->priority) {
+    list_remove (&t->elem);
+    list_push_back (&mlq[newPriority], &t->elem);
+  }
+
+  t->priority = newPriority;
 }
 
 static void update_recent_cpu(struct thread *t, void *aux UNUSED) {
@@ -211,6 +240,8 @@ static void update_recent_cpu(struct thread *t, void *aux UNUSED) {
 
 static bool
 is_highest_priority(struct thread *t) {
+  ASSERT(!thread_mlfqs);
+
   if (!list_empty (&ready_list)) {
     struct thread *head = list_entry (list_front(&ready_list), struct thread, elem);
     return get_max_priority_donation(t) >= get_max_priority_donation(head);
@@ -222,10 +253,14 @@ static void
 add_to_ready_list(struct thread *t) {
   ASSERT (intr_get_level () == INTR_OFF);
 
-  list_push_back (&ready_list, &t->elem);
-
-  if (!thread_mlfqs)
+  if (!thread_mlfqs) {
+    list_push_back (&ready_list, &t->elem);
     list_sort(&ready_list, &donation_less, NULL);
+  } else {
+    list_push_back (&mlq[t->priority], &t->elem);
+  }
+
+  ready_count++;
 }
 
 /* Prints thread statistics. */
@@ -469,17 +504,16 @@ thread_get_priority (void)
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED)
+thread_set_nice (int nice)
 {
-  /* Not yet implemented. */
+  thread_current ()->nice = nice;
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void)
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current ()->nice;
 }
 
 /* Returns 100 times the system load average. */
@@ -494,8 +528,7 @@ thread_get_load_avg (void)
 int
 thread_get_recent_cpu (void)
 {
-  /* Not yet implemented. */
-  return 0;
+  return fix_trunc (fix_mul (thread_current ()->recent_cpu, fix_int(100)));
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -633,10 +666,27 @@ alloc_frame (struct thread *t, size_t size)
 static struct thread *
 next_thread_to_run (void)
 {
-  if (list_empty (&ready_list))
+  if (ready_count == 0) {
     return idle_thread;
+  }
   else {
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+    ready_count--;
+
+    if (!thread_mlfqs) {
+      return list_entry (list_pop_front (&ready_list), struct thread, elem);
+    } else {
+      int i;
+      for ( i = PRI_MAX; i >= PRI_MIN; i--) {
+        if (!list_empty (&mlq[i])) {
+          return list_entry (list_pop_front (&mlq[i]), struct thread, elem);
+        }
+      }
+
+      // panic since something is seriously wrong
+      ASSERT(false);
+
+      return NULL;
+    }
   }
 }
 
