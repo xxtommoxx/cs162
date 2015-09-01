@@ -91,7 +91,6 @@ static bool priority_less (const struct list_elem *a_, const struct list_elem *b
 static int get_max_priority_donation (struct thread *a);
 static int get_max_priority_donation_helper (struct thread *a, int depth);
 static void add_to_ready_list(struct thread *t);
-static bool is_highest_priority(struct thread *t);
 
 static void update_priority(struct thread *t, void *aux UNUSED);
 static void update_recent_cpu(struct thread *t, void *aux UNUSED);
@@ -238,7 +237,7 @@ static void update_recent_cpu(struct thread *t, void *aux UNUSED) {
   t->recent_cpu = fix_add (fix_mul (coeff, t->recent_cpu), fix_int (t->nice));
 }
 
-static bool
+bool
 is_highest_priority(struct thread *t) {
   ASSERT(!thread_mlfqs);
 

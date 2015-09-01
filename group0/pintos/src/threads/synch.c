@@ -152,8 +152,11 @@ sema_up_helper (struct semaphore *sema, struct lock *lock)
   if (lock != NULL)
     lock->holder = NULL;
 
-  thread_yield(); // the unblocked thread might have higher priority
+  if (!intr_context () && !is_highest_priority (thread_current ()))
+    thread_yield(); // the unblocked thread might have higher priority
+
   intr_set_level (old_level);
+
 }
 
 static void sema_test_helper (void *sema_);
