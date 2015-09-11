@@ -42,8 +42,13 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+
+  // only need the program name; it is printed out when the program terminates
+  char *token_save;
+  char *program_name = strtok_r (file_name, " ", &token_save);
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (program_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
   return tid;
@@ -113,12 +118,13 @@ start_process (void *file_name_)
   }
 
   // push char** argv
+  char *temp = esp;
   esp = esp - sizeof(char **);
-  memcpy (esp, &esp, sizeof(char **));
+  memcpy (esp, &temp, sizeof(char **));
 
   // push number of arguments
-  esp = esp - sizeof(int *);
-  memcpy (esp, &num_args, sizeof(int *));
+  esp = esp - sizeof(int);
+  memcpy (esp, &num_args, sizeof(int));
 
   // push return address
   esp = esp - sizeof(void *);
