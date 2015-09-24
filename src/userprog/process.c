@@ -15,6 +15,7 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -23,12 +24,18 @@ static struct semaphore temporary;
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
+static struct process_thread_arg {
+    char *file_name;
+    volatile bool failed;
+    struct semaphore load_wait;
+};
+
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
-process_execute (const char *file_name)
+process_execute (char *file_name)
 {
 
   char *fn_copy;
@@ -47,18 +54,38 @@ process_execute (const char *file_name)
   char *token_save;
   char *program_name = strtok_r (file_name, " ", &token_save);
 
+  struct process *proc = malloc(sizeof(*proc));
+
+  struct process_thread_arg *thread_arg = malloc(sizeof(*thread_arg));
+  thread_arg->file_name = fn_copy;
+  sema_init (&thread_arg->load_wait, 0);
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (program_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create_process (program_name, proc, PRI_DEFAULT, start_process, thread_arg);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
-  return tid;
+
+
+  // wait until looad is complete to check failed flag
+  sema_down (&thread_arg->load_wait);
+
+  free (thread_arg);
+  palloc_free_page (fn_copy);
+
+  if (thread_arg->failed || tid == TID_ERROR) {
+    return FAIL_ERROR;
+  } else {
+    return tid;
+  }
 }
 
 /* A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *file_name_)
+start_process (void *arg)
 {
+  struct process_thread_arg *thread_arg = arg;
+  char *file_name_ = thread_arg->file_name;
   struct intr_frame if_;
   bool success;
 
@@ -132,11 +159,15 @@ start_process (void *file_name_)
 
   if_.esp = esp;
 
-  palloc_free_page (file_name_);
 
   /* If load failed, quit. */
-  if (!success)
+  if (!success) {
+    thread_arg->failed = true;
     thread_exit ();
+  }
+
+  sema_up(&thread_arg->load_wait);
+
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
