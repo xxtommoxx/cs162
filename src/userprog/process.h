@@ -6,17 +6,25 @@
 
 #define FAIL_ERROR -1
 
-tid_t process_execute (char *file_name);
-int process_wait (tid_t);
-void process_exit (void);
-void process_activate (void);
-
 struct process {
-  bool terminated;
-  struct process *parent;
+  tid_t tid;
+
+  struct semaphore wait_sema;
+  bool failed;
+  int return_code;
+
+  struct semaphore children_sema;
   struct list children;
   struct list_elem elem;
-  uint8_t return_code;
 };
+
+tid_t process_execute (char *file_name);
+void process_init (void);
+int process_wait (tid_t);
+void process_exit (void);
+void process_failed (void);
+void process_activate (void);
+struct process *process_current (void);
+
 
 #endif /* userprog/process.h */

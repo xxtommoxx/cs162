@@ -20,15 +20,68 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
-static struct semaphore temporary;
+
+// wrapper struct to pass to process create thread parameter
+struct process_arg {
+    char *file_name;
+    bool success;
+    struct semaphore sema;
+};
+
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static struct process *process_create (void);
+static struct process_arg *process_arg_create (void);
 
-static struct process_thread_arg {
-    char *file_name;
-    volatile bool failed;
-    struct semaphore load_wait;
-};
+// a fake process so that the main process can have
+// a parent which makes the code simpler
+static struct process *initial_process;
+
+void
+process_init (void)
+{
+  initial_process = process_create();
+}
+
+struct process *
+process_current (void)
+{
+  ASSERT(initial_process != NULL);
+
+  struct process *thread_proc = thread_current ()->proc;
+
+  if (thread_proc != NULL)
+    return thread_proc;
+  else
+    return initial_process;
+}
+
+struct process_arg *
+process_arg_create (void) {
+  struct process_arg *proc_arg = malloc (sizeof (*proc_arg));
+  sema_init (&proc_arg->sema, 0);
+  return proc_arg;
+}
+
+static struct process *
+process_create (void)
+{
+  struct process *proc = malloc (sizeof (*proc));
+  list_init (&proc->children);
+
+  sema_init (&proc->wait_sema, 0);
+  sema_init (&proc->children_sema, 1);
+  proc->failed = false;
+
+  if (initial_process != NULL) {
+    struct process *parent = process_current ();
+    if (parent != NULL) {
+      list_push_back (&parent->children, &proc->elem);
+    }
+  }
+
+  return proc;
+}
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -37,11 +90,9 @@ static struct process_thread_arg {
 tid_t
 process_execute (char *file_name)
 {
-
   char *fn_copy;
   tid_t tid;
 
-  sema_init (&temporary, 0);
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
@@ -49,30 +100,29 @@ process_execute (char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-
-  // only need the program name; it is printed out when the program terminates
+  // used to print when program terminates
   char *token_save;
   char *program_name = strtok_r (file_name, " ", &token_save);
 
-  struct process *proc = malloc(sizeof(*proc));
+  struct process *proc = process_create ();
 
-  struct process_thread_arg *thread_arg = malloc(sizeof(*thread_arg));
-  thread_arg->file_name = fn_copy;
-  sema_init (&thread_arg->load_wait, 0);
+  struct process_arg *proc_arg = process_arg_create ();
+  proc_arg->file_name = fn_copy;
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create_process (program_name, proc, PRI_DEFAULT, start_process, thread_arg);
+  tid = thread_create_process (program_name, proc, PRI_DEFAULT, start_process, proc_arg);
+  proc->tid = tid;
+
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
 
+  // wait until load
+  sema_down (&proc_arg->sema);
 
-  // wait until looad is complete to check failed flag
-  sema_down (&thread_arg->load_wait);
-
-  free (thread_arg);
+  free (proc_arg);
   palloc_free_page (fn_copy);
 
-  if (thread_arg->failed || tid == TID_ERROR) {
+  if (!proc_arg->success || tid == TID_ERROR) {
     return FAIL_ERROR;
   } else {
     return tid;
@@ -84,8 +134,8 @@ process_execute (char *file_name)
 static void
 start_process (void *arg)
 {
-  struct process_thread_arg *thread_arg = arg;
-  char *file_name_ = thread_arg->file_name;
+  struct process_arg *proc_arg = arg;
+  char *file_name_ = proc_arg->file_name;
   struct intr_frame if_;
   bool success;
 
@@ -111,7 +161,6 @@ start_process (void *arg)
   int num_args = 0;
   void *null_ptr;
   null_ptr = 0;
-
 
   while (token != NULL) {
     /* assign arg the start address of the esp which corresponds to the copied token */
@@ -159,15 +208,13 @@ start_process (void *arg)
 
   if_.esp = esp;
 
+  proc_arg->success = success;
+  sema_up(&proc_arg->sema);
 
   /* If load failed, quit. */
   if (!success) {
-    thread_arg->failed = true;
     thread_exit ();
   }
-
-  sema_up(&thread_arg->load_wait);
-
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -189,10 +236,41 @@ start_process (void *arg)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED)
+process_wait (tid_t child_tid)
 {
-  sema_down (&temporary);
-  return 0;
+  struct process *proc = process_current ();
+
+  sema_down (&proc->children_sema);
+
+  struct list_elem *e;
+  struct process *child_proc = NULL;
+
+  for (e = list_begin (&proc->children); e != list_end (&proc->children); e = list_next (e)) {
+    struct process *curr_proc = list_entry (e, struct process, elem);
+
+    if (curr_proc->tid == child_tid) {
+      child_proc = curr_proc;
+      list_remove (&child_proc->elem);
+      break;
+    }
+  }
+
+  sema_up (&proc->children_sema);;
+
+  if (child_proc != NULL && !child_proc->failed) {
+    sema_down (&child_proc->wait_sema);
+    int ret_code = child_proc->return_code;
+    free (child_proc);
+    return ret_code;
+  } else {
+    return FAIL_ERROR;
+  }
+}
+
+void
+process_failed (void)
+{
+  process_current ()->failed = true;
 }
 
 /* Free the current process's resources. */
@@ -200,6 +278,7 @@ void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
+  sema_up(&process_current ()->wait_sema);
   uint32_t *pd;
 
   /* Destroy the current process's page directory and switch back
@@ -218,7 +297,6 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
-  sema_up (&temporary);
 }
 
 /* Sets up the CPU for running user code in the current
