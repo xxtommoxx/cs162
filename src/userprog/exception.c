@@ -93,14 +93,16 @@ kill (struct intr_frame *f)
 
       #ifdef USERPROG
         process_failed ();
+      #else
+        thread_exit ();
       #endif
-      thread_exit ();
 
     case SEL_KCSEG:
       /* Kernel's code segment, which indicates a kernel bug.
          Kernel code shouldn't throw exceptions.  (Page faults
          may cause kernel exceptions--but they shouldn't arrive
          here.)  Panic the kernel to make the point.  */
+
       intr_dump_frame (f);
       PANIC ("Kernel bug - unexpected interrupt in kernel");
 
@@ -112,8 +114,9 @@ kill (struct intr_frame *f)
 
       #ifdef USERPROG
         process_failed ();
+      #else
+        thread_exit ();
       #endif
-      thread_exit ();
     }
 }
 

@@ -71,7 +71,6 @@ process_create (void)
 
   sema_init (&proc->wait_sema, 0);
   sema_init (&proc->children_sema, 1);
-  proc->failed = false;
 
   if (initial_process != NULL) {
     struct process *parent = process_current ();
@@ -213,7 +212,7 @@ start_process (void *arg)
 
   /* If load failed, quit. */
   if (!success) {
-    thread_exit ();
+    process_failed ();
   }
 
   /* Start the user process by simulating a return from an
@@ -257,7 +256,7 @@ process_wait (tid_t child_tid)
 
   sema_up (&proc->children_sema);;
 
-  if (child_proc != NULL && !child_proc->failed) {
+  if (child_proc != NULL) {
     sema_down (&child_proc->wait_sema);
     int ret_code = child_proc->return_code;
     free (child_proc);
@@ -270,7 +269,11 @@ process_wait (tid_t child_tid)
 void
 process_failed (void)
 {
-  process_current ()->failed = true;
+  char *proc_name = thread_current ()->name;
+  printf("%s: exit(%d)\n", proc_name, FAIL_ERROR);
+
+  process_current ()->return_code = FAIL_ERROR;
+  thread_exit ();
 }
 
 /* Free the current process's resources. */

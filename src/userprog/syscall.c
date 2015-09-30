@@ -1,13 +1,19 @@
+#include <debug.h>
+#include <stdio.h>
+#include <syscall-nr.h>
+
 #include "userprog/syscall.h"
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
-#include <stdio.h>
-#include <syscall-nr.h>
+
 #include "threads/interrupt.h"
+#include "threads/vaddr.h"
 #include "threads/thread.h"
+
 #include "devices/shutdown.h"
 
 static void syscall_handler (struct intr_frame *);
+static void validate_user_addr (uint32_t *addr);
 
 void
 syscall_init (void)
@@ -16,32 +22,60 @@ syscall_init (void)
 }
 
 static void*
-to_kernel_address(void *addr) {
-  return pagedir_get_page (thread_current ()->pagedir, addr);
+to_kernel_address(uint32_t *addr) {
+  validate_user_addr (addr);
+
+  void *kernel_page = pagedir_get_page (thread_current ()->pagedir, (void *) addr);
+
+  if (kernel_page != NULL) {
+    return kernel_page;
+  } else {
+    process_failed ();
+    NOT_REACHED ();
+  }
+}
+
+void
+validate_user_addr (uint32_t *addr) {
+  if (!is_user_vaddr ((void *) addr)) {
+    process_failed ();
+    NOT_REACHED ();
+  }
 }
 
 static void
 syscall_handler (struct intr_frame *f UNUSED)
 {
-  uint32_t* args = ((uint32_t*) f->esp);
+
+  to_kernel_address (f->esp);
+
+  uint32_t *args = f->esp;
 
   switch(args[0]) {
     case SYS_EXIT: ;
+      validate_user_addr (args + 1);
+
       int return_code = args[1];
+
       process_current ()->return_code = return_code;
+
       char *proc_name = thread_current ()->name;
       printf("%s: exit(%d)\n", proc_name, return_code);
+
       f->eax = return_code;
+
       thread_exit();
       break;
-    case SYS_WRITE:
-      printf("%s", (char *) args[2]);
+    case SYS_WRITE: ;
+      char *buf = to_kernel_address(args[2]);
+      printf("%s", buf);
       f->eax = 0;
       break;
-    case SYS_NULL:
+    case SYS_NULL: ;
+      validate_user_addr (args + 1);
       f->eax = args[1] + 1;
       break;
-    case SYS_HALT:
+    case SYS_HALT: ;
       shutdown_power_off ();
       break;
     case SYS_EXEC: ;
@@ -50,6 +84,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       f->eax = pid;
       break;
     case SYS_WAIT: ;
+      validate_user_addr (args + 1);
       int wait_return_code = process_wait(args[1]);
       f->eax = wait_return_code;
       break;

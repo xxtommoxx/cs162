@@ -10,7 +10,6 @@ struct process {
   tid_t tid;
 
   struct semaphore wait_sema;
-  bool failed;
   int return_code;
 
   struct semaphore children_sema;
