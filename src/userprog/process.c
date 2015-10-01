@@ -118,10 +118,13 @@ process_execute (char *file_name)
   // wait until load
   sema_down (&proc_arg->sema);
 
+  bool success = proc_arg->success;
+
   free (proc_arg);
   palloc_free_page (fn_copy);
 
-  if (!proc_arg->success || tid == TID_ERROR) {
+  if (!success || tid == TID_ERROR) {
+    free (proc);
     return FAIL_ERROR;
   } else {
     return tid;
@@ -156,73 +159,76 @@ start_process (void *arg)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (token, &if_.eip, &if_.esp);
 
-  void *esp = if_.esp;
-  int num_args = 0;
-  void *null_ptr;
-  null_ptr = 0;
+  if (success) {
+    void *esp = if_.esp;
+    int num_args = 0;
+    void *null_ptr;
+    null_ptr = 0;
 
-  while (token != NULL) {
-    /* assign arg the start address of the esp which corresponds to the copied token */
-    int token_len = strlen (token) + 1; // add one because len does not include null character
-    esp = esp - token_len;
-    memcpy (esp, token, token_len);
+    while (token != NULL) {
+      /* assign arg the start address of the esp which corresponds to the copied token */
+      int token_len = strlen (token) + 1; // add one because len does not include null character
+      esp = esp - token_len;
+      memcpy (esp, token, token_len);
 
-    struct arg *a = malloc (sizeof (struct arg));
-    a->ptr = esp;
-    list_push_back (&arg_list, &a->elem);
-    num_args++;
-    token = strtok_r (NULL, " ", &token_save);
-  }
+      struct arg *a = malloc (sizeof (struct arg));
+      a->ptr = esp;
+      list_push_back (&arg_list, &a->elem);
+      num_args++;
+      token = strtok_r (NULL, " ", &token_save);
+    }
 
-  // align word boundary
-  int bytes_align = (size_t) esp % 4;
-  esp = esp - bytes_align;
-  memcpy (esp, &null_ptr, bytes_align);
+    // align word boundary
+    int bytes_align = (size_t) esp % 4;
+    esp = esp - bytes_align;
+    memcpy (esp, &null_ptr, bytes_align);
 
-  // null ptr sentinel c standard
-  esp = esp - sizeof(char *);
-  memcpy (esp, &null_ptr, sizeof(char *));
-
-  // push char* that points to the tokens on the stack
-  while (!list_empty (&arg_list)) {
-    struct list_elem *e = list_pop_back (&arg_list);
-    struct arg *f = list_entry (e, struct arg, elem);
+    // null ptr sentinel c standard
     esp = esp - sizeof(char *);
-    memcpy (esp, &f->ptr, sizeof(char *));
-    free (f);
+    memcpy (esp, &null_ptr, sizeof(char *));
+
+    // push char* that points to the tokens on the stack
+    while (!list_empty (&arg_list)) {
+      struct list_elem *e = list_pop_back (&arg_list);
+      struct arg *f = list_entry (e, struct arg, elem);
+      esp = esp - sizeof(char *);
+      memcpy (esp, &f->ptr, sizeof(char *));
+      free (f);
+    }
+
+    // push char** argv
+    char *temp = esp;
+    esp = esp - sizeof(char **);
+    memcpy (esp, &temp, sizeof(char **));
+
+    // push number of arguments
+    esp = esp - sizeof(int);
+    memcpy (esp, &num_args, sizeof(int));
+
+    // push return address
+    esp = esp - sizeof(void *);
+    memcpy (esp, &null_ptr, sizeof(void *));
+
+    if_.esp = esp;
+
+    // notify exec caller
+    proc_arg->success = true;
+    sema_up (&proc_arg->sema);
+
+
+    /* Start the user process by simulating a return from an
+       interrupt, implemented by intr_exit (in
+       threads/intr-stubs.S).  Because intr_exit takes all of its
+       arguments on the stack in the form of a `struct intr_frame',
+       we just point the stack pointer (%esp) to our stack frame
+       and jump to it. */
+    asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
+    NOT_REACHED ();
+  } else {
+    // notify exec caller
+    proc_arg->success = false;
+    sema_up (&proc_arg->sema);
   }
-
-  // push char** argv
-  char *temp = esp;
-  esp = esp - sizeof(char **);
-  memcpy (esp, &temp, sizeof(char **));
-
-  // push number of arguments
-  esp = esp - sizeof(int);
-  memcpy (esp, &num_args, sizeof(int));
-
-  // push return address
-  esp = esp - sizeof(void *);
-  memcpy (esp, &null_ptr, sizeof(void *));
-
-  if_.esp = esp;
-
-  proc_arg->success = success;
-  sema_up(&proc_arg->sema);
-
-  /* If load failed, quit. */
-  if (!success) {
-    process_failed ();
-  }
-
-  /* Start the user process by simulating a return from an
-     interrupt, implemented by intr_exit (in
-     threads/intr-stubs.S).  Because intr_exit takes all of its
-     arguments on the stack in the form of a `struct intr_frame',
-     we just point the stack pointer (%esp) to our stack frame
-     and jump to it. */
-  asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
-  NOT_REACHED ();
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
