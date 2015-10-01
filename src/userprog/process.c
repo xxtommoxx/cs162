@@ -40,7 +40,7 @@ static struct process *initial_process;
 void
 process_init (void)
 {
-  initial_process = process_create();
+  initial_process = process_create ();
 }
 
 struct process *
@@ -69,6 +69,9 @@ process_create (void)
   struct process *proc = malloc (sizeof (*proc));
   list_init (&proc->children);
 
+  list_init (&proc->files);
+  proc->current_fd_id = 2; // 0 and 1 are reserved
+
   sema_init (&proc->wait_sema, 0);
   sema_init (&proc->children_sema, 1);
 
@@ -81,6 +84,49 @@ process_create (void)
 
   return proc;
 }
+
+uint32_t
+process_create_fd (struct file *f) {
+  struct file_descriptor *fd = malloc (sizeof (*fd));
+  fd->id = process_current ()->current_fd_id;
+  process_current ()->current_fd_id++;
+  list_push_back(&process_current ()->files, &fd->elem);
+  return fd->id;
+}
+
+void
+process_remove_fd (uint32_t id) {
+  struct process *proc = process_current ();
+  struct list_elem *e;
+
+  for (e = list_begin (&proc->files); e != list_end (&proc->files); e = list_next (e)) {
+    struct file_descriptor *fd = list_entry (e, struct file_descriptor, elem);
+
+    if (fd->id == id) {
+      list_remove (&fd->elem);
+      free (fd);
+      break;
+    }
+  }
+}
+
+struct file *
+process_get_file (uint32_t id) {
+  struct file *f = NULL;
+  struct process *proc = process_current ();
+  struct list_elem *e;
+
+  for (e = list_begin (&proc->files); e != list_end (&proc->files); e = list_next (e)) {
+    struct file_descriptor *fd = list_entry (e, struct file_descriptor, elem);
+
+    if (fd->id == id) {
+      f = fd->f;
+      break;
+    }
+  }
+  return f;
+}
+
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
