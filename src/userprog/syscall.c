@@ -150,14 +150,18 @@ syscall_handler (struct intr_frame *f UNUSED)
       if (read_fd == STDIN_FD) {
         f->eax = input_getc ();
       } else {
+        lock_acquire (&file_lock);
         struct file *f3 = process_get_file (read_fd);
+        lock_release (&file_lock);
 
         if (f3 == NULL) {
           return -1;
         } else {
           char *buf = args[2];
           validate_user_addr_range (buf, args[3]);
+          lock_acquire (&file_lock);
           int read = file_read (f3, (void *) buf, args[3]);
+          lock_release (&file_lock);
           f->eax = read;
         }
       }
