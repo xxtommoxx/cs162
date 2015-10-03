@@ -1,5 +1,8 @@
 Refresh my knowledge on basic OS concepts.
 
+Modified so that it can run on OSX.
+See https://github.com/jinmel/pintos_mac
+
 Status:
 
 1. http://web.stanford.edu/class/cs140/projects/pintos/pintos_2.html#SEC15 - all tests pass

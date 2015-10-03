@@ -33,6 +33,9 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 static struct process *process_create (void);
 static struct process_arg *process_arg_create (void);
 
+
+static void free_fd (struct file_descriptor *f);
+
 // a fake process so that the main process can have
 // a parent which makes the code simpler
 static struct process *initial_process;
@@ -89,6 +92,7 @@ uint32_t
 process_create_fd (struct file *f) {
   struct file_descriptor *fd = malloc (sizeof (*fd));
   fd->id = process_current ()->current_fd_id;
+  fd->f = f;
   process_current ()->current_fd_id++;
   list_push_back(&process_current ()->files, &fd->elem);
   return fd->id;
@@ -104,10 +108,15 @@ process_remove_fd (uint32_t id) {
 
     if (fd->id == id) {
       list_remove (&fd->elem);
-      free (fd);
+      free_fd (fd);
       break;
     }
   }
+}
+
+static void free_fd (struct file_descriptor *fd) {
+  file_close (fd->f);
+  free (fd);
 }
 
 struct file *
@@ -333,7 +342,16 @@ void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
-  sema_up(&process_current ()->wait_sema);
+  sema_up (&process_current ()->wait_sema);
+
+  // clean open fd
+  struct list_elem *e;
+  for (e = list_begin (&process_current ()->files); e != list_end (&process_current ()->files); ) {
+    struct file_descriptor *fd = list_entry (e, struct file_descriptor, elem);
+    e = list_remove (e);
+    free_fd (fd);
+  }
+
   uint32_t *pd;
 
   /* Destroy the current process's page directory and switch back

@@ -6,6 +6,10 @@
 #include "filesys/file.h"
 
 #define FAIL_ERROR -1
+
+#define STDOUT_FD 1
+#define STDIN_FD 0
+
 struct file_descriptor {
     uint32_t id;
     struct file *f;
