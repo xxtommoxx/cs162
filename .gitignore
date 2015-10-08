@@ -38,3 +38,5 @@
 **/CMakeFiles/
 **/CMakeLists.txt
 **/cmake_install.cmake
+
+**/.DS_Store

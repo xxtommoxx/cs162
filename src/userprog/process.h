@@ -20,6 +20,8 @@ struct file_descriptor {
 struct process {
   tid_t tid;
 
+  struct file *executable;
+
   struct semaphore wait_sema;
   int return_code;
 

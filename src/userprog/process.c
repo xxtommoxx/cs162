@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "userprog/gdt.h"
+#include "userprog/syscall.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
 #include "filesys/directory.h"
@@ -66,10 +67,21 @@ process_arg_create (void) {
   return proc_arg;
 }
 
+static void
+close_exe_file (void)
+{
+  if (process_current ()->executable != NULL) {
+    acquire_file_lock ();
+    file_close (process_current ()->executable);
+    release_file_lock ();
+  }
+}
+
 static struct process *
 process_create (void)
 {
   struct process *proc = malloc (sizeof (*proc));
+  proc->executable = NULL;
   list_init (&proc->children);
 
   list_init (&proc->files);
@@ -179,7 +191,6 @@ process_execute (char *file_name)
   palloc_free_page (fn_copy);
 
   if (!success || tid == TID_ERROR) {
-    free (proc);
     return FAIL_ERROR;
   } else {
     return tid;
@@ -344,6 +355,8 @@ process_exit (void)
   struct thread *cur = thread_current ();
   sema_up (&process_current ()->wait_sema);
 
+  close_exe_file ();
+
   // clean open fd
   struct list_elem *e;
   for (e = list_begin (&process_current ()->files); e != list_end (&process_current ()->files); ) {
@@ -464,6 +477,8 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 bool
 load (const char *file_name, void (**eip) (void), void **esp)
 {
+  acquire_file_lock ();
+
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
@@ -480,11 +495,15 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   /* Open executable file. */
   file = filesys_open (file_name);
+
   if (file == NULL)
     {
       printf ("load: %s: open failed\n", file_name);
       goto done;
     }
+
+  file_deny_write (file);
+  process_current ()->executable = file;
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -569,7 +588,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  release_file_lock ();
   return success;
 }
 
